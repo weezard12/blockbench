@@ -149,30 +149,14 @@
 		<button onclick="factoryResetAndReload()" class="large" style="margin-right: auto; margin-left: auto;">Factory Reset</button>
 		<button onclick="window.close()" class="large" style="margin-right: auto; margin-left: auto;">Quit</button>
 	</div>
-	<script type="module">
-		window.startupMetrics.bundle_import_started_at = performance.now();
-		window.sendStartupLog('Starting import of dist/bundle.js', 'log', {
-			started_at_ms: window.startupMetrics.bundle_import_started_at,
+	<script>
+		window.startupMetrics.bundle_script_expected_at = performance.now();
+		window.sendStartupLog('Loading module script dist/bundle.js via static tag', 'log', {
+			expected_at_ms: window.startupMetrics.bundle_script_expected_at,
 			readyState: document.readyState,
 		});
-		try {
-			await import('./dist/bundle.js');
-			window.startupMetrics.bundle_import_finished_at = performance.now();
-			window.sendStartupLog('dist/bundle.js imported successfully', 'log', {
-				duration_ms: window.startupMetrics.bundle_import_finished_at - window.startupMetrics.bundle_import_started_at,
-				readyState: document.readyState,
-			});
-		} catch (err) {
-			console.error(err);
-			window.startupMetrics.bundle_import_failed_at = performance.now();
-			window.sendStartupLog('dist/bundle.js import failed', 'error', err);
-			let error_element = document.querySelector('#loading_error_detail');
-			if (error_element && !error_element.innerText) {
-				let details = window.serializeStartupError(err);
-				error_element.innerText = details?.stack || details?.message || String(details);
-			}
-		}
 	</script>
+	<script type="module" src="dist/bundle.js"></script>
 
 	<div style="display: none;"></div>
 
@@ -301,9 +285,7 @@
 		window.sendStartupLog('Entering post-bundle startup validation script', 'log', {
 			readyState: document.readyState,
 			error_count: window.ErrorLog?.length || 0,
-			bundle_import_started_at: window.startupMetrics?.bundle_import_started_at,
-			bundle_import_finished_at: window.startupMetrics?.bundle_import_finished_at,
-			bundle_import_failed_at: window.startupMetrics?.bundle_import_failed_at,
+			bundle_script_expected_at: window.startupMetrics?.bundle_script_expected_at,
 		});
 		// Browser compatibility check
 		try {
