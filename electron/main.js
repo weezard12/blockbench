@@ -15,6 +15,55 @@ remote.initialize();
 let all_wins = [];
 let orig_win;
 let load_project_data;
+const startup_log_only = process.argv.includes('--startup-log-only');
+
+function serializeMainDetails(details, depth = 0, seen = new WeakSet()) {
+	if (details === null || details === undefined) return details;
+	if (typeof details === 'string' || typeof details === 'number' || typeof details === 'boolean') return details;
+	if (details instanceof Error) {
+		return {
+			name: details.name,
+			message: details.message,
+			stack: details.stack,
+		};
+	}
+	if (Array.isArray(details)) {
+		return details.slice(0, 20).map(item => serializeMainDetails(item, depth + 1, seen));
+	}
+	if (typeof details === 'object') {
+		if (depth > 2) return '[MaxDepth]';
+		if (seen.has(details)) return '[Circular]';
+		seen.add(details);
+		let result = {};
+		Object.keys(details).slice(0, 25).forEach(key => {
+			try {
+				result[key] = serializeMainDetails(details[key], depth + 1, seen);
+			} catch (error) {
+				result[key] = `[Unserializable: ${error?.message || error}]`;
+			}
+		});
+		return result;
+	}
+	return String(details);
+}
+function logMain(message, details) {
+	let suffix = '';
+	if (details !== undefined) {
+		try {
+			suffix = ' ' + JSON.stringify(serializeMainDetails(details));
+		} catch (error) {
+			suffix = ' [unserializable details]';
+		}
+	}
+	console.log(`[Blockbench main] ${message}${suffix}`);
+}
+
+process.on('uncaughtException', (error) => {
+	console.error('[Blockbench main] uncaughtException', serializeMainDetails(error));
+});
+process.on('unhandledRejection', (reason) => {
+	console.error('[Blockbench main] unhandledRejection', serializeMainDetails(reason));
+});
 
 (() => {
 	// Allow advanced users to specify a custom userData directory.
@@ -56,7 +105,14 @@ if (LaunchSettings.get('hardware_acceleration') == false) {
 }
 
 function createWindow(second_instance, options = {}) {
+	logMain('createWindow called', {
+		second_instance: !!second_instance,
+		options,
+		startup_log_only,
+		argv_tail: process.argv.slice(-6),
+	});
 	if (app.requestSingleInstanceLock && !app.requestSingleInstanceLock()) {
+		logMain('single instance lock request failed; quitting');
 		app.quit()
 		return;
 	}
@@ -83,10 +139,102 @@ function createWindow(second_instance, options = {}) {
 		win_options.y = Math.max(options.position[1] - 100, 0);
 	}
 	let win = new BrowserWindow(win_options)
+	logMain('BrowserWindow created', {
+		id: win.id,
+		show: win_options.show,
+		frame: win_options.frame,
+		titleBarStyle: win_options.titleBarStyle,
+		bounds: {width: win_options.width, height: win_options.height, x: win_options.x, y: win_options.y},
+		webPreferences: win_options.webPreferences,
+	});
 	if (!orig_win) orig_win = win;
 	all_wins.push(win);
 
 	remote.enable(win.webContents)
+	logMain('remote module enabled for window', {id: win.id});
+	win.on('close', () => {
+		logMain('window close requested', {id: win.id});
+	});
+	win.on('ready-to-show', () => {
+		logMain('window ready-to-show', {id: win.id});
+	});
+	win.on('unresponsive', () => {
+		logMain('window became unresponsive', {id: win.id});
+	});
+	win.on('responsive', () => {
+		logMain('window responsive again', {id: win.id});
+	});
+	win.webContents.on('did-start-loading', () => {
+		logMain('webContents did-start-loading', {id: win.id, url: win.webContents.getURL()});
+	});
+	win.webContents.on('dom-ready', () => {
+		logMain('webContents dom-ready', {id: win.id, url: win.webContents.getURL()});
+	});
+	win.webContents.on('did-frame-finish-load', (event, isMainFrame, frameProcessId, frameRoutingId) => {
+		logMain('webContents did-frame-finish-load', {
+			id: win.id,
+			isMainFrame,
+			frameProcessId,
+			frameRoutingId,
+			url: win.webContents.getURL(),
+		});
+	});
+	win.webContents.on('did-finish-load', () => {
+		logMain('webContents did-finish-load', {id: win.id, url: win.webContents.getURL()});
+	});
+	win.webContents.on('did-stop-loading', () => {
+		logMain('webContents did-stop-loading', {id: win.id, url: win.webContents.getURL()});
+	});
+	win.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame, frameProcessId, frameRoutingId) => {
+		console.error('[Blockbench main] webContents did-fail-load', serializeMainDetails({
+			id: win.id,
+			errorCode,
+			errorDescription,
+			validatedURL,
+			isMainFrame,
+			frameProcessId,
+			frameRoutingId,
+		}));
+	});
+	win.webContents.on('did-fail-provisional-load', (event, errorCode, errorDescription, validatedURL, isMainFrame, frameProcessId, frameRoutingId) => {
+		console.error('[Blockbench main] webContents did-fail-provisional-load', serializeMainDetails({
+			id: win.id,
+			errorCode,
+			errorDescription,
+			validatedURL,
+			isMainFrame,
+			frameProcessId,
+			frameRoutingId,
+		}));
+	});
+	win.webContents.on('render-process-gone', (event, details) => {
+		console.error('[Blockbench main] webContents render-process-gone', serializeMainDetails({
+			id: win.id,
+			details,
+			url: win.webContents.getURL(),
+		}));
+	});
+	win.webContents.on('preload-error', (event, preloadPath, error) => {
+		console.error('[Blockbench main] webContents preload-error', serializeMainDetails({
+			id: win.id,
+			preloadPath,
+			error,
+		}));
+	});
+	win.webContents.on('destroyed', () => {
+		logMain('webContents destroyed', {id: win.id});
+	});
+	win.webContents.on('console-message', (event, level, message, line, sourceId) => {
+		if (sourceId?.startsWith('devtools://')) return;
+		if (sourceId?.startsWith('chrome-devtools://')) return;
+		const logger = level >= 2 ? console.error : level === 1 ? console.warn : console.log;
+		logger(`[Blockbench renderer console] ${message}`, serializeMainDetails({
+			id: win.id,
+			level,
+			line,
+			sourceId,
+		}));
+	});
 
 	if (process.platform === 'darwin') {
 
@@ -159,21 +307,29 @@ function createWindow(second_instance, options = {}) {
 		win.setMenu(null);
 	}
 	
-	if (options.maximize !== false) win.maximize()
-	win.show()
+	if (startup_log_only) {
+		logMain('startup-log-only mode enabled; window will remain hidden', {id: win.id});
+	} else {
+		if (options.maximize !== false) win.maximize()
+		win.show()
+		logMain('window shown', {id: win.id, maximized: options.maximize !== false});
+	}
 
 	var index_path = path.join(__dirname, './../index.html')
+	logMain('loading index.html into window', {id: win.id, index_path});
 	win.loadURL(url.format({
 		pathname: index_path,
 		protocol: 'file:',
 		slashes: true
 	}))
 	win.on('closed', () => {
+		logMain('window closed', {id: win.id});
 		win = null;
 		all_wins.splice(all_wins.indexOf(win), 1);
 	})
 	if (second_instance === true) {
 		win.webContents.second_instance = true;
+		logMain('window marked as second-instance window', {id: win.id});
 	}
 	return win;
 }
@@ -181,8 +337,13 @@ function createWindow(second_instance, options = {}) {
 app.commandLine.appendSwitch('ignore-gpu-blacklist')
 app.commandLine.appendSwitch('ignore-gpu-blocklist')
 app.commandLine.appendSwitch('enable-accelerated-video')
+logMain('command line switches configured', {
+	startup_log_only,
+	switches: ['ignore-gpu-blacklist', 'ignore-gpu-blocklist', 'enable-accelerated-video'],
+});
 
 app.on('second-instance', function (event, argv, cwd) {
+	logMain('app second-instance event', {argv_tail: argv.slice(-6), cwd});
 	process.argv = argv;
 	let win = all_wins.find(win => !win.isDestroyed());
 	if (win && argv[argv.length-1 || 1] && argv[argv.length-1 || 1].substr(0, 2) !== '--') {
@@ -193,6 +354,7 @@ app.on('second-instance', function (event, argv, cwd) {
 	}
 })
 app.on('open-file', function (event, path) {
+	logMain('app open-file event', {path});
 	process.argv[process.argv.length-1 || 1] = path;
 	let win = all_wins.find(win => !win.isDestroyed());
 	if (win) {
@@ -288,24 +450,53 @@ ipcMain.on('renderer-startup-log', (event, payload = {}) => {
 	logRendererPayload('Blockbench startup', payload);
 })
 
+app.on('child-process-gone', (event, details) => {
+	console.error('[Blockbench main] child-process-gone', serializeMainDetails(details));
+})
+app.on('gpu-info-update', () => {
+	logMain('gpu-info-update fired');
+})
+app.on('before-quit', (event) => {
+	logMain('before-quit fired', {window_count: all_wins.length});
+})
+app.on('will-quit', (event) => {
+	logMain('will-quit fired', {window_count: all_wins.length});
+})
+app.on('quit', (event, exitCode) => {
+	logMain('quit fired', {exitCode});
+})
 app.on('ready', () => {
+	logMain('app ready', {
+		execPath: process.execPath,
+		appPath: app.getAppPath(),
+		userData: app.getPath('userData'),
+		argv_tail: process.argv.slice(-8),
+	});
 	const dev_mode = process.execPath && process.execPath.match(/node_modules[\\\/]electron/);
+	logMain('ready handler entered', {dev_mode: !!dev_mode, startup_log_only});
 
 	if (dev_mode) {
 
 		// Timeout to avoid race condition of Blockbench opening before esbuild finishes. Needs proper solution long-term
 		setTimeout(() => {
+			logMain('creating development window after startup delay');
 			createWindow()
 		}, 1000);
 
 	} else {
 
+		logMain('creating production window immediately');
 		createWindow()
 		
 	}
 
 	let app_was_loaded = false;
 	ipcMain.on('app-loaded', () => {
+		logMain('app-loaded IPC received', {
+			app_was_loaded,
+			has_pending_project_data: !!load_project_data,
+			window_count: all_wins.length,
+		});
 		if (load_project_data) {
 			all_wins[all_wins.length-1].send('load-tab', load_project_data);
 			load_project_data = null;
@@ -355,5 +546,6 @@ app.on('ready', () => {
 })
 
 app.on('window-all-closed', () => {
+	logMain('window-all-closed fired; quitting app');
 	app.quit()
 })

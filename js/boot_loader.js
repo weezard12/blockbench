@@ -37,8 +37,10 @@ Interface.preview = document.getElementById('preview');
 startupLog('boot_loader: interface nodes bound');
 
 CustomTheme.setup();
+startupLog('boot_loader: custom theme setup complete');
 
 StateMemory.init('dialog_paths', 'object')
+startupLog('boot_loader: StateMemory initialized');
 
 initCanvas()
 animate()
@@ -73,12 +75,23 @@ if (isApp === false) {
 } else {
 	$('.web_only').remove()
 }
+startupLog('boot_loader: runtime environment detected', {
+	isApp,
+	browser: Blockbench.browser,
+	operating_system: Blockbench.operating_system,
+});
 BARS.setupActions()
+BARS.setupActions && startupLog('boot_loader: BARS.setupActions finished');
 BARS.setupToolbars()
+BARS.setupToolbars && startupLog('boot_loader: BARS.setupToolbars finished');
 BARS.setupVue()
+BARS.setupVue && startupLog('boot_loader: BARS.setupVue finished');
 MenuBar.setup()
+startupLog('boot_loader: MenuBar.setup finished');
 translateUI()
+startupLog('boot_loader: translateUI finished');
 loadThemes()
+startupLog('boot_loader: loadThemes finished');
 initReferenceImages()
 startupLog('boot_loader: toolbars, menus, translations, themes, and reference images initialized');
 
@@ -90,6 +103,7 @@ console.log('%cBlockbench ' + Blockbench.version + (isApp
 )
 Blockbench.startup_count = parseInt(localStorage.getItem('startups')||0) + 1;
 localStorage.setItem('startups', Blockbench.startup_count);
+startupLog('boot_loader: startup counter incremented', {startup_count: Blockbench.startup_count});
 
 document.getElementById('blackout').addEventListener('click', event => {
 	if (typeof open_interface.cancel == 'function' && open_interface.cancel_on_click_outside !== false) {
@@ -101,6 +115,7 @@ document.getElementById('blackout').addEventListener('click', event => {
 
 if (isApp) {
 	updateRecentProjects()
+	startupLog('boot_loader: recent projects updated');
 }
 
 if (!isApp) {
@@ -150,19 +165,23 @@ Blockbench.on('before_closing', (event) => {
 })
 
 updateProjectResolution()
+startupLog('boot_loader: project resolution updated');
 
 setupInterface()
 setupDragHandlers()
 startupLog('boot_loader: interface setup and drag handlers initialized');
 
+startupLog('boot_loader: running onVueSetup hooks', {hook_count: onVueSetup.funcs.length});
 onVueSetup.funcs.forEach((func) => {
 	if (typeof func === 'function') {
 		func()
 	}
 })
+startupLog('boot_loader: onVueSetup hooks finished');
 
 if (settings.streamer_mode.value) {
 	updateStreamerModeNotification();
+	startupLog('boot_loader: streamer mode notification updated');
 }
 
 AutoBackup.initialize();
@@ -187,6 +206,7 @@ startupLog('boot_loader: last_version persisted');
 		startupLog(`boot_loader: proceed entered via ${source}`);
 
 		Settings.saveLocalStorages();
+		startupLog('boot_loader: local storages saved during proceed');
 		if (isApp) {
 			startupLog('boot_loader: loading open-with file handlers');
 			loadOpenWithBlockbenchFile();
@@ -219,6 +239,7 @@ if (Blockbench.isMobile) {
 	// Reselect tool to update transform toolbar in status bar on mobile
 	Toolbox.selected = null;
 	BarItems.move_tool.select();
+	startupLog('boot_loader: mobile tool reselection finished');
 }
 
 document.getElementById('page_wrapper').classList.remove('invisible');

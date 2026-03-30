@@ -28,7 +28,14 @@
 	<script>
 		if (typeof module === 'object') {window.module = module; module = undefined;}//jQuery Fix
 		window.skipStartupDevTools = !!window.process?.argv?.includes('--startup-log-only');
-		window.serializeStartupError = function(value) {
+		window.startupMetrics = {
+			inline_script_started_at: performance.now(),
+			initial_ready_state: document.readyState,
+			argv_tail: window.process?.argv?.slice(-8) || [],
+		};
+		window.serializeStartupError = function(value, depth = 0, seen = new WeakSet()) {
+			if (value === null || value === undefined) return value;
+			if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
 			if (value instanceof Error) {
 				return {
 					name: value.name,
@@ -36,11 +43,21 @@
 					stack: value.stack,
 				}
 			}
+			if (Array.isArray(value)) {
+				return value.slice(0, 20).map(item => window.serializeStartupError(item, depth + 1, seen));
+			}
 			if (value && typeof value === 'object') {
+				if (depth > 2) return '[MaxDepth]';
+				if (seen.has(value)) return '[Circular]';
+				seen.add(value);
 				let result = {};
-				['name', 'message', 'stack', 'reason', 'code'].forEach(key => {
-					if (value[key] !== undefined) {
-						result[key] = value[key];
+				Object.keys(value).slice(0, 20).forEach(key => {
+					try {
+						if (value[key] !== undefined) {
+							result[key] = window.serializeStartupError(value[key], depth + 1, seen);
+						}
+					} catch (err) {
+						result[key] = `[Unserializable: ${err?.message || err}]`;
 					}
 				})
 				if (Object.keys(result).length) {
@@ -60,7 +77,27 @@
 				}
 			} catch (err) {}
 		}
-		window.sendStartupLog('Inline startup script initialized');
+		window.sendStartupLog('Inline startup script initialized', 'log', window.startupMetrics);
+		document.addEventListener('readystatechange', () => {
+			window.sendStartupLog('Document readyState changed', 'log', {readyState: document.readyState});
+		});
+		document.addEventListener('DOMContentLoaded', () => {
+			window.sendStartupLog('DOMContentLoaded fired', 'log', {readyState: document.readyState});
+		});
+		window.addEventListener('load', () => {
+			window.sendStartupLog('Window load fired', 'log', {readyState: document.readyState});
+		});
+		[1000, 3000, 10000].forEach(delay => {
+			setTimeout(() => {
+				window.sendStartupLog('Startup watchdog fired', window.Blockbench?.setup_successful ? 'log' : 'warn', {
+					delay_ms: delay,
+					readyState: document.readyState,
+					setup_successful: !!window.Blockbench?.setup_successful,
+					error_count: window.ErrorLog?.length || 0,
+					loading_error_detail: document.querySelector('#loading_error_detail')?.innerText || '',
+				});
+			}, delay);
+		});
 
 		if (localStorage.getItem('theme')) {
 			try {
@@ -112,7 +149,30 @@
 		<button onclick="factoryResetAndReload()" class="large" style="margin-right: auto; margin-left: auto;">Factory Reset</button>
 		<button onclick="window.close()" class="large" style="margin-right: auto; margin-left: auto;">Quit</button>
 	</div>
-	<script type="module" src="dist/bundle.js"></script>
+	<script type="module">
+		window.startupMetrics.bundle_import_started_at = performance.now();
+		window.sendStartupLog('Starting import of dist/bundle.js', 'log', {
+			started_at_ms: window.startupMetrics.bundle_import_started_at,
+			readyState: document.readyState,
+		});
+		try {
+			await import('./dist/bundle.js');
+			window.startupMetrics.bundle_import_finished_at = performance.now();
+			window.sendStartupLog('dist/bundle.js imported successfully', 'log', {
+				duration_ms: window.startupMetrics.bundle_import_finished_at - window.startupMetrics.bundle_import_started_at,
+				readyState: document.readyState,
+			});
+		} catch (err) {
+			console.error(err);
+			window.startupMetrics.bundle_import_failed_at = performance.now();
+			window.sendStartupLog('dist/bundle.js import failed', 'error', err);
+			let error_element = document.querySelector('#loading_error_detail');
+			if (error_element && !error_element.innerText) {
+				let details = window.serializeStartupError(err);
+				error_element.innerText = details?.stack || details?.message || String(details);
+			}
+		}
+	</script>
 
 	<div style="display: none;"></div>
 
@@ -238,6 +298,13 @@
 
 	<script type="module">
 		let browser_check_passed = false;
+		window.sendStartupLog('Entering post-bundle startup validation script', 'log', {
+			readyState: document.readyState,
+			error_count: window.ErrorLog?.length || 0,
+			bundle_import_started_at: window.startupMetrics?.bundle_import_started_at,
+			bundle_import_finished_at: window.startupMetrics?.bundle_import_finished_at,
+			bundle_import_failed_at: window.startupMetrics?.bundle_import_failed_at,
+		});
 		// Browser compatibility check
 		try {
 			eval('[1].at(0)');
@@ -269,6 +336,10 @@
 				window.openDevTools();
 			}
 		} else {
+			window.sendStartupLog('Startup validation succeeded after bundle evaluation', 'log', {
+				readyState: document.readyState,
+				error_count: window.ErrorLog?.length || 0,
+			});
 			document.getElementById('loading_error_message').innerHTML = 'No loading errors...'
 		}
 	</script>

@@ -90,13 +90,32 @@ export function emitPluginInitLog(message: string, level: PluginInitLogLevel = '
 	} catch (err) {}
 }
 type StartupLogLevel = 'log'|'warn'|'error';
-function serializeLogDetails(details: any) {
+function serializeLogDetails(details: any, depth = 0, seen = new WeakSet()) {
+	if (details === null || details === undefined) return details;
+	if (typeof details === 'string' || typeof details === 'number' || typeof details === 'boolean') return details;
 	if (details instanceof Error) {
 		return {
 			name: details.name,
 			message: details.message,
 			stack: details.stack,
 		}
+	}
+	if (Array.isArray(details)) {
+		return details.slice(0, 20).map(item => serializeLogDetails(item, depth + 1, seen));
+	}
+	if (typeof details === 'object') {
+		if (depth > 2) return '[MaxDepth]';
+		if (seen.has(details)) return '[Circular]';
+		seen.add(details);
+		let result: Record<string, any> = {};
+		Object.keys(details).slice(0, 20).forEach(key => {
+			try {
+				result[key] = serializeLogDetails(details[key], depth + 1, seen);
+			} catch (error: any) {
+				result[key] = `[Unserializable: ${error?.message || error}]`;
+			}
+		});
+		return result;
 	}
 	return details;
 }
