@@ -106,7 +106,7 @@
 			"license": "LICENSE.MD"
 		},
 		"linux": {
-			"artifactName": "${productName}_${version}.${ext}",
+			"artifactName": "${productName}_${version}_${arch}.${ext}",
 			"target": [
 				"deb",
 				"rpm",
@@ -139,7 +139,9 @@
 		"build-test-portable": "npm run build-electron && electron-builder --windows portable --publish=never",
 		"publish-windows": "npm run build-electron && electron-builder -w --publish=onTagOrDraft && node ./scripts/rename_portable.js && electron-builder --windows portable --publish=onTagOrDraft",
 		"publish-mac": "npm uninstall electron-color-picker && npm run build-electron && electron-builder --publish=always",
+		"build-ubuntu-arm64": "npm uninstall electron-color-picker && npm run build-electron && electron-builder --linux deb --arm64 --publish=never",
 		"publish-linux": "npm uninstall electron-color-picker && npm run build-electron && electron-builder --linux --publish=onTagOrDraft",
+		"publish-ubuntu-arm64": "npm uninstall electron-color-picker && npm run build-electron && electron-builder --linux deb --arm64 --publish=onTagOrDraft",
 		"pwa": "node ./scripts/generate_pwa.js",
 		"prepublish-web": "npm run build-web && npm run pwa && npm run generate-docs",
 		"prepublish-beta": "node ./scripts/enable_beta.js && npm run build-web && npm run pwa && npm run generate-docs",
