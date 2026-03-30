@@ -263,9 +263,26 @@ ipcMain.on('show-item-in-folder', async (event, path) => {
 ipcMain.on('open-in-default-app', async (event, path) => {
 	shell.openPath(path);
 })
+ipcMain.on('plugin-init-log', (event, payload = {}) => {
+	if (!payload || typeof payload.message != 'string') return;
+	let details_text = '';
+	if (payload.details !== undefined) {
+		try {
+			details_text = ' ' + JSON.stringify(payload.details);
+		} catch (error) {
+			details_text = ' [unserializable details]';
+		}
+	}
+	const level = payload.level === 'error'
+		? 'error'
+		: payload.level === 'warn'
+			? 'warn'
+			: 'log';
+	const logger = console[level].bind(console);
+	logger(`[Blockbench plugin-init] ${payload.message}${details_text}`);
+})
 
 app.on('ready', () => {
-
 	const dev_mode = process.execPath && process.execPath.match(/node_modules[\\\/]electron/);
 
 	if (dev_mode) {
@@ -283,7 +300,6 @@ app.on('ready', () => {
 
 	let app_was_loaded = false;
 	ipcMain.on('app-loaded', () => {
-
 		if (load_project_data) {
 			all_wins[all_wins.length-1].send('load-tab', load_project_data);
 			load_project_data = null;

@@ -7,7 +7,7 @@ import { sort_collator } from "./misc";
 import { separateThousands } from "./util/math_util";
 import { getDateDisplay } from "./util/util";
 import { Filesystem } from "./file_system";
-import { app, fs, getPluginPermissions, getPluginScopedRequire, https, revokePluginPermissions } from "./native_apis";
+import { app, emitPluginInitLog, fs, getPluginPermissions, getPluginScopedRequire, https, revokePluginPermissions } from "./native_apis";
 import { Panels } from "./interface/panels";
 import VersionUtil from './util/version_util'
 import { ModelLoader } from "./io/model_loader";
@@ -73,6 +73,14 @@ StateMemory.init('installed_plugins', 'array')
 // @ts-ignore
 Plugins.installed = StateMemory.installed_plugins = StateMemory.installed_plugins.filter(p => p && typeof p == 'object');
 let session_plugin_installations = 0;
+const PluginDirectoryAutoload = {
+	ids: new Set<string>()
+};
+type PluginDirectoryAutoloadEntry = {
+	id: string
+	path: string
+	status: 'registered' | 'updated' | 'enabled' | 'confirmed'
+}
 
 
 type PluginVariant = 'desktop'|'web'|'both';
@@ -522,12 +530,15 @@ export class Plugin {
 			let content = await this.#runPluginFile(file.path).catch((error) => {
 				console.error(error);
 			});
-			if (content) {
-				if (first && scope.oninstall) {
-					scope.oninstall()
-				}
-				scope.path = file.path;
+			if (!content) {
+				delete Plugins.registered[this.id];
+				Plugins.all.remove(this);
+				return this;
 			}
+			if (first && scope.oninstall) {
+				scope.oninstall()
+			}
+			scope.path = file.path;
 		} else {
 			this.#runCode(file.content as string);
 			if (first && scope.oninstall) {
@@ -1005,6 +1016,89 @@ export class Plugin {
 export const BBPlugin = Plugin;
 export type BBPlugin = Plugin;
 
+function syncPluginDirectoryAutoloadEntries() {
+	PluginDirectoryAutoload.ids.clear();
+	if (!isApp) return [] as PluginDirectoryAutoloadEntry[];
+
+	let entries;
+	try {
+		fs.mkdirSync(Plugins.path, {recursive: true});
+		entries = fs.readdirSync(Plugins.path, {withFileTypes: true});
+	} catch (err) {
+		emitPluginInitLog(`Failed to prepare plugin directory ${Plugins.path}: ${err}`, 'error');
+		return [];
+	}
+	let candidates = new Map<string, string>();
+
+	for (let entry of entries) {
+		let plugin_path = '';
+		if (entry.isFile() && entry.name.endsWith('.js')) {
+			let plugin_id = entry.name.replace(/\.js$/i, '');
+			let existing_installation = Plugins.installed.find(plugin => plugin.id == plugin_id && plugin.source != 'file');
+			if (existing_installation) continue;
+			plugin_path = Plugins.path + entry.name;
+		} else if (entry.isDirectory()) {
+			let nested_plugin_path = `${Plugins.path}${entry.name}${osfs}${entry.name}.js`;
+			if (fs.existsSync(nested_plugin_path)) {
+				let existing_installation = Plugins.installed.find(plugin => plugin.id == entry.name && plugin.source != 'file');
+				if (existing_installation) continue;
+				plugin_path = nested_plugin_path;
+			}
+		}
+		if (!plugin_path) continue;
+
+		let plugin_id = pathToName(plugin_path);
+		if (candidates.has(plugin_id)) {
+			emitPluginInitLog(`Skipping duplicate plugin directory candidate for "${plugin_id}"`, 'warn', {
+				kept: candidates.get(plugin_id),
+				skipped: plugin_path,
+			});
+			continue;
+		}
+		candidates.set(plugin_id, plugin_path);
+	}
+
+	if (!candidates.size) {
+		return [] as PluginDirectoryAutoloadEntry[];
+	}
+
+	emitPluginInitLog(`Discovered ${candidates.size} plugin directory candidate${pluralS(candidates.size)} in ${Plugins.path}`);
+	let synced: PluginDirectoryAutoloadEntry[] = [];
+	for (let [plugin_id, plugin_path] of candidates) {
+		PluginDirectoryAutoload.ids.add(plugin_id);
+		let installation = Plugins.installed.find(plugin => plugin.id == plugin_id);
+		let status: PluginDirectoryAutoloadEntry['status'] = 'confirmed';
+
+		if (!installation) {
+			installation = {
+				id: plugin_id,
+				version: '',
+				path: plugin_path,
+				source: 'file',
+			};
+			Plugins.installed.push(installation);
+			status = 'registered';
+		} else {
+			if (installation.path != plugin_path || installation.source != 'file') {
+				status = 'updated';
+			} else if (installation.disabled) {
+				status = 'enabled';
+			}
+			installation.id = plugin_id;
+			installation.path = plugin_path;
+			installation.source = 'file';
+			delete installation.disabled;
+		}
+		synced.push({id: plugin_id, path: plugin_path, status});
+	}
+	synced.forEach(plugin => {
+		if (plugin.status != 'confirmed') {
+			emitPluginInitLog(`Auto-load ${plugin.status} plugin "${plugin.id}" from ${plugin.path}`);
+		}
+	});
+	return synced;
+}
+
 if (isApp) {
 	Plugins.path = app.getPath('userData')+osfs+'plugins'+osfs
 	fs.readdir(Plugins.path, function(err) {
@@ -1050,16 +1144,17 @@ $.getJSON('https://blckbn.ch/api/stats/plugins?weeks=2', data => {
 })
 
 export async function loadInstalledPlugins() {
-	if (Plugins.loading_promise) {
-		await Plugins.loading_promise;
-	}
+	const auto_loaded_plugins = syncPluginDirectoryAutoloadEntries();
 	const install_promises = [];
-	const online_access = Plugins.json instanceof Object && navigator.onLine;
+	let online_access = false;
+	const deferred_store_plugins: PluginInstallation[] = [];
 
-	// Setup offers from store
-	if (online_access) {
+	function setupStoreOffers() {
+		if (!online_access) return;
 		for (let id in Plugins.json) {
-			new Plugin(id, Plugins.json[id]);
+			if (!Plugins.registered[id]) {
+				new Plugin(id, Plugins.json[id]);
+			}
 		}
 		Plugins.sort();
 	}
@@ -1100,14 +1195,30 @@ export async function loadInstalledPlugins() {
 		// Install plugins
 		var load_counter = 0;
 		function loadPlugin(installation: PluginInstallation) {
+			let auto_loaded = PluginDirectoryAutoload.ids.has(installation.id);
 			if (installation.source == 'file') {
 				// Dev Plugins
 				if (isApp && fs.existsSync(installation.path)) {
-					var instance = new Plugin(installation.id, {disabled: installation.disabled});
-					install_promises.push(instance.loadFromFile({path: installation.path, name: installation.path, content: ''}, false));
+					var instance = new Plugin(installation.id, {disabled: auto_loaded ? false : installation.disabled});
+					let promise = instance.loadFromFile({path: installation.path, name: installation.path, content: ''}, false);
+					install_promises.push(promise);
+					if (auto_loaded) {
+						promise.then(() => {
+							if (instance.installed && instance.path) {
+								emitPluginInitLog(`Initialized plugin "${installation.id}" from ${installation.path}`);
+							} else {
+								emitPluginInitLog(`Failed to initialize plugin "${installation.id}" from ${installation.path}`, 'error');
+							}
+						}).catch(error => {
+							emitPluginInitLog(`Failed to initialize plugin "${installation.id}" from ${installation.path}`, 'error', error);
+						});
+					}
 					load_counter++;
 					console.log(`🧩📁 Loaded plugin "${installation.id || installation.path}" from file`);
 				} else {
+					if (auto_loaded) {
+						emitPluginInitLog(`Plugin directory candidate "${installation.id}" is missing at ${installation.path}`, 'warn');
+					}
 					Plugins.installed.remove(installation);
 				}
 
@@ -1162,12 +1273,34 @@ export async function loadInstalledPlugins() {
 
 		for (let installation of Plugins.installed.slice()) {
 			try {
+				if (installation.source == 'store') {
+					deferred_store_plugins.push(installation);
+					continue;
+				}
 				loadPlugin(installation);
 			} catch (err) {
 				console.error('Error loading installed plugin', installation.id, err);
 			}
 		}
+		if (Plugins.loading_promise) {
+			await Plugins.loading_promise;
+		}
+		online_access = Plugins.json instanceof Object && navigator.onLine;
+		setupStoreOffers();
+		for (let installation of deferred_store_plugins) {
+			try {
+				loadPlugin(installation);
+			} catch (err) {
+				console.error('Error loading deferred store plugin', installation.id, err);
+			}
+		}
 		console.log(`Loaded ${load_counter} plugin${pluralS(load_counter)}`)
+	} else {
+		if (Plugins.loading_promise) {
+			await Plugins.loading_promise;
+		}
+		online_access = Plugins.json instanceof Object && navigator.onLine;
+		setupStoreOffers();
 	}
 	StateMemory.save('installed_plugins')
 	
@@ -1175,7 +1308,20 @@ export async function loadInstalledPlugins() {
 	install_promises.forEach(promise => {
 		promise.catch(console.error);
 	})
-	return await Promise.allSettled(install_promises);
+	let results = await Promise.allSettled(install_promises);
+	if (auto_loaded_plugins.length) {
+		let active_count = auto_loaded_plugins.filter(plugin => {
+			let registered = Plugins.registered[plugin.id];
+			return registered?.installed && registered?.path == plugin.path && registered?.disabled != true;
+		}).length;
+		let failed_count = auto_loaded_plugins.length - active_count;
+		let summary = `Plugin directory initialization complete: ${active_count}/${auto_loaded_plugins.length} plugin${pluralS(auto_loaded_plugins.length)} active`;
+		if (failed_count) {
+			summary += `, ${failed_count} failed`;
+		}
+		emitPluginInitLog(summary);
+	}
+	return results;
 }
 
 BARS.defineActions(function() {

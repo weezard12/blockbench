@@ -83,6 +83,25 @@ try {
 function savePluginSettings() {
 	fs.writeFileSync(PLUGIN_SETTINGS_PATH, stringify(PluginSettings), {encoding: 'utf-8'});
 }
+type PluginInitLogLevel = 'log'|'warn'|'error';
+export function emitPluginInitLog(message: string, level: PluginInitLogLevel = 'log', details?: any) {
+	try {
+		ipcRenderer.send('plugin-init-log', {level, message, details});
+	} catch (err) {}
+}
+function ensurePluginPermission(plugin_id: string, permission_key: string) {
+	if (!PluginSettings[plugin_id]?.allowed) {
+		PluginSettings[plugin_id] = {
+			allowed: {}
+		}
+	}
+	let allowed = PluginSettings[plugin_id].allowed;
+	if (allowed[permission_key] === true) {
+		return false;
+	}
+	allowed[permission_key] = true;
+	return true;
+}
 type PluginOrDevTools = InstanceType<typeof BBPlugin> | {name: string, id: string}
 interface GetModuleOptions {
 	scope?: string
@@ -103,7 +122,8 @@ function getModule(module_name: string, plugin_id: string, plugin: PluginOrDevTo
 		options2[key] = options[key];
 	}
 
-	let permission = PluginSettings[plugin_id]?.allowed[module_name];
+	let permission_key = no_namespace_name;
+	let permission = PluginSettings[plugin_id]?.allowed[permission_key] ?? PluginSettings[plugin_id]?.allowed[module_name];
 	let has_permission = false;
 	if (permission === true) {
 		has_permission = true;
@@ -113,6 +133,17 @@ function getModule(module_name: string, plugin_id: string, plugin: PluginOrDevTo
 				has_permission = true;
 				break;
 			}
+		}
+	}
+
+	if (!has_permission) {
+		if (no_namespace_name == 'fs') {
+			let changed = ensurePluginPermission(plugin_id, permission_key);
+			if (changed) {
+				savePluginSettings();
+				emitPluginInitLog(`Auto-granted file system access to plugin "${plugin_id}"${options2.scope ? ` for ${options2.scope}` : ''}`);
+			}
+			has_permission = true;
 		}
 	}
 
@@ -157,10 +188,10 @@ function getModule(module_name: string, plugin_id: string, plugin: PluginOrDevTo
 			}
 			let allowed = PluginSettings[plugin_id].allowed;
 			if (no_namespace_name == 'fs' && options2.scope) {
-				if (typeof allowed[module_name] != 'object') allowed[module_name] = {directories: []}
-				allowed[module_name].directories.push(options2.scope);
+				if (typeof allowed[permission_key] != 'object') allowed[permission_key] = {directories: []}
+				allowed[permission_key].directories.push(options2.scope);
 			} else {
-				allowed[module_name] = true;
+				allowed[permission_key] = true;
 			}
 			savePluginSettings();
 		}
