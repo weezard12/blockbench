@@ -263,7 +263,7 @@ ipcMain.on('show-item-in-folder', async (event, path) => {
 ipcMain.on('open-in-default-app', async (event, path) => {
 	shell.openPath(path);
 })
-ipcMain.on('plugin-init-log', (event, payload = {}) => {
+function logRendererPayload(prefix, payload = {}) {
 	if (!payload || typeof payload.message != 'string') return;
 	let details_text = '';
 	if (payload.details !== undefined) {
@@ -279,7 +279,13 @@ ipcMain.on('plugin-init-log', (event, payload = {}) => {
 			? 'warn'
 			: 'log';
 	const logger = console[level].bind(console);
-	logger(`[Blockbench plugin-init] ${payload.message}${details_text}`);
+	logger(`[${prefix}] ${payload.message}${details_text}`);
+}
+ipcMain.on('plugin-init-log', (event, payload = {}) => {
+	logRendererPayload('Blockbench plugin-init', payload);
+})
+ipcMain.on('renderer-startup-log', (event, payload = {}) => {
+	logRendererPayload('Blockbench startup', payload);
 })
 
 app.on('ready', () => {

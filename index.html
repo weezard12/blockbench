@@ -27,7 +27,41 @@
 <body spellcheck="false" class="maximized">
 	<script>
 		if (typeof module === 'object') {window.module = module; module = undefined;}//jQuery Fix
-		
+		window.skipStartupDevTools = !!window.process?.argv?.includes('--startup-log-only');
+		window.serializeStartupError = function(value) {
+			if (value instanceof Error) {
+				return {
+					name: value.name,
+					message: value.message,
+					stack: value.stack,
+				}
+			}
+			if (value && typeof value === 'object') {
+				let result = {};
+				['name', 'message', 'stack', 'reason', 'code'].forEach(key => {
+					if (value[key] !== undefined) {
+						result[key] = value[key];
+					}
+				})
+				if (Object.keys(result).length) {
+					return result;
+				}
+			}
+			return value;
+		}
+		window.sendStartupLog = function(message, level = 'log', details) {
+			try {
+				if (typeof require === 'function') {
+					require('electron').ipcRenderer.send('renderer-startup-log', {
+						level,
+						message,
+						details: window.serializeStartupError(details),
+					});
+				}
+			} catch (err) {}
+		}
+		window.sendStartupLog('Inline startup script initialized');
+
 		if (localStorage.getItem('theme')) {
 			try {
 				stored_theme = JSON.parse(localStorage.getItem('theme'));
@@ -41,11 +75,23 @@
 		window.onerror = (message, file, line) => {
 			if (message.includes('ResizeObserver loop completed with undelivered notifications')) return;
 			window.ErrorLog.push({message, file, line})
+			window.sendStartupLog('window.onerror before startup completed', 'error', {message, file, line});
 			if (typeof Blockbench != 'undefined' && Blockbench.setup_successful) return;
 
 			let error_element = document.querySelector('#loading_error_detail');
 			if (error_element && !error_element.innerText) {
 				error_element.innerText = `${message}\nIn .${file.split(location.origin).join('')}:${line}`
+			}
+		}
+		window.onunhandledrejection = (event) => {
+			window.sendStartupLog('Unhandled promise rejection before startup completed', 'error', event.reason);
+			if (typeof Blockbench != 'undefined' && Blockbench.setup_successful) return;
+			let error_element = document.querySelector('#loading_error_detail');
+			if (error_element && !error_element.innerText) {
+				let details = window.serializeStartupError(event.reason);
+				error_element.innerText = typeof details === 'string'
+					? details
+					: (details?.message || 'Unhandled promise rejection');
 			}
 		}
 		window.factoryResetAndReload = function() {
@@ -202,12 +248,22 @@
 			browser_check_passed = true;
 		} catch (err) {
 			console.error(err);
+			window.sendStartupLog('Browser compatibility check failed', 'error', err);
 			let error_element = document.querySelector('#loading_error_detail')
 			error_element.innerHTML = `Incompatible browser version. Please update your web browser.`;
 		}
 		if (!window.Blockbench?.setup_successful || !browser_check_passed) {
+			window.sendStartupLog('Startup validation failed after bundle evaluation', 'error', {
+				browser_check_passed,
+				setup_successful: !!window.Blockbench?.setup_successful,
+				error_count: window.ErrorLog?.length || 0,
+				first_error: window.ErrorLog?.[0] || null,
+				loading_error_detail: document.querySelector('#loading_error_detail')?.innerText || '',
+			});
 			document.getElementById('loading_error_message').style.display = 'block'
-			if (window.require) {
+			if (window.skipStartupDevTools) {
+				window.sendStartupLog('Skipping automatic DevTools because --startup-log-only was provided');
+			} else if (window.require) {
 				require('@electron/remote').getCurrentWindow().webContents.openDevTools();
 			} else if (window.openDevTools) {
 				window.openDevTools();

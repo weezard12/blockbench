@@ -89,6 +89,26 @@ export function emitPluginInitLog(message: string, level: PluginInitLogLevel = '
 		ipcRenderer.send('plugin-init-log', {level, message, details});
 	} catch (err) {}
 }
+type StartupLogLevel = 'log'|'warn'|'error';
+function serializeLogDetails(details: any) {
+	if (details instanceof Error) {
+		return {
+			name: details.name,
+			message: details.message,
+			stack: details.stack,
+		}
+	}
+	return details;
+}
+export function emitStartupLog(message: string, level: StartupLogLevel = 'log', details?: any) {
+	try {
+		ipcRenderer.send('renderer-startup-log', {
+			level,
+			message,
+			details: serializeLogDetails(details),
+		});
+	} catch (err) {}
+}
 function ensurePluginPermission(plugin_id: string, permission_key: string) {
 	if (!PluginSettings[plugin_id]?.allowed) {
 		PluginSettings[plugin_id] = {

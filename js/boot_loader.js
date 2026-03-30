@@ -4,10 +4,29 @@ import { loadThemes } from "./interface/themes";
 import { translateUI } from "./languages";
 import { loadInstalledPlugins } from "./plugin_loader";
 import { animate } from "./preview/preview";
-import { ipcRenderer, SystemInfo } from "./native_apis";
+import { emitStartupLog, ipcRenderer, SystemInfo } from "./native_apis";
 import { initializeDesktopApp, loadOpenWithBlockbenchFile } from "./desktop";
 import { AutoBackup } from "./auto_backup";
 import { initReferenceImages } from "./preview/reference_images";
+
+function serializeStartupError(error) {
+	if (error instanceof Error) {
+		return {
+			name: error.name,
+			message: error.message,
+			stack: error.stack,
+		}
+	}
+	return error;
+}
+function startupLog(message, details) {
+	emitStartupLog(message, 'log', details);
+}
+function startupError(message, error) {
+	emitStartupLog(message, 'error', serializeStartupError(error));
+}
+
+startupLog('boot_loader: module evaluation started');
 
 Interface.page_wrapper = document.getElementById('page_wrapper');
 Interface.work_screen = document.getElementById('work_screen');
@@ -15,6 +34,7 @@ Interface.center_screen = document.getElementById('center');
 Interface.right_bar = document.getElementById('right_bar');
 Interface.left_bar = document.getElementById('left_bar');
 Interface.preview = document.getElementById('preview');
+startupLog('boot_loader: interface nodes bound');
 
 CustomTheme.setup();
 
@@ -22,6 +42,7 @@ StateMemory.init('dialog_paths', 'object')
 
 initCanvas()
 animate()
+startupLog('boot_loader: canvas initialized and animation loop started');
 
 Blockbench.browser = 'electron'
 if (isApp === false) {
@@ -59,6 +80,7 @@ MenuBar.setup()
 translateUI()
 loadThemes()
 initReferenceImages()
+startupLog('boot_loader: toolbars, menus, translations, themes, and reference images initialized');
 
 console.log(`Three.js r${THREE.REVISION}`)
 console.log('%cBlockbench ' + Blockbench.version + (isApp
@@ -131,6 +153,7 @@ updateProjectResolution()
 
 setupInterface()
 setupDragHandlers()
+startupLog('boot_loader: interface setup and drag handlers initialized');
 
 onVueSetup.funcs.forEach((func) => {
 	if (typeof func === 'function') {
@@ -143,35 +166,54 @@ if (settings.streamer_mode.value) {
 }
 
 AutoBackup.initialize();
+startupLog('boot_loader: auto backup initialized');
 
 if (isApp) {
 	initializeDesktopApp();
+	startupLog('boot_loader: desktop app initialization finished');
 } else {
 	initializeWebApp();
+	startupLog('boot_loader: web app initialization finished');
 }
 
 localStorage.setItem('last_version', Blockbench.version);
+startupLog('boot_loader: last_version persisted');
 
 (function() {
 	// Promise.any workaround
 	let proceeded = false;
-	function proceed() {
+	function proceed(source = 'unknown') {
 		if (proceeded) return;
+		startupLog(`boot_loader: proceed entered via ${source}`);
 
 		Settings.saveLocalStorages();
 		if (isApp) {
+			startupLog('boot_loader: loading open-with file handlers');
 			loadOpenWithBlockbenchFile();
+			startupLog('boot_loader: sending app-loaded IPC');
 			ipcRenderer.send('app-loaded');
 		} else {
+			startupLog('boot_loader: loading info from URL');
 			loadInfoFromURL();
 		}
 		proceeded = true;
 	}
-	loadInstalledPlugins().then(proceed);
-	setTimeout(proceed, 1200);
+	startupLog('boot_loader: starting installed plugin load');
+	loadInstalledPlugins().then(() => {
+		startupLog('boot_loader: loadInstalledPlugins resolved');
+		proceed('plugins');
+	}).catch(error => {
+		startupError('boot_loader: loadInstalledPlugins rejected', error);
+		throw error;
+	});
+	setTimeout(() => {
+		startupLog('boot_loader: plugin load timeout fallback fired');
+		proceed('timeout');
+	}, 1200);
 })()
 
 setStartScreen(true);
+startupLog('boot_loader: start screen initialized');
 
 if (Blockbench.isMobile) {
 	// Reselect tool to update transform toolbar in status bar on mobile
@@ -180,5 +222,7 @@ if (Blockbench.isMobile) {
 }
 
 document.getElementById('page_wrapper').classList.remove('invisible');
+startupLog('boot_loader: page wrapper made visible');
 
 Blockbench.setup_successful = true;
+startupLog('boot_loader: setup_successful set true');
