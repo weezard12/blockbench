@@ -83,6 +83,14 @@ try {
 function savePluginSettings() {
 	fs.writeFileSync(PLUGIN_SETTINGS_PATH, stringify(PluginSettings), {encoding: 'utf-8'});
 }
+function ensurePluginPermissionBucket(plugin_id: string) {
+	if (!PluginSettings[plugin_id]?.allowed) {
+		PluginSettings[plugin_id] = {
+			allowed: {}
+		}
+	}
+	return PluginSettings[plugin_id].allowed;
+}
 type PluginInitLogLevel = 'log'|'warn'|'error';
 export function emitPluginInitLog(message: string, level: PluginInitLogLevel = 'log', details?: any) {
 	try {
@@ -129,12 +137,7 @@ export function emitStartupLog(message: string, level: StartupLogLevel = 'log', 
 	} catch (err) {}
 }
 function ensurePluginPermission(plugin_id: string, permission_key: string) {
-	if (!PluginSettings[plugin_id]?.allowed) {
-		PluginSettings[plugin_id] = {
-			allowed: {}
-		}
-	}
-	let allowed = PluginSettings[plugin_id].allowed;
+	let allowed = ensurePluginPermissionBucket(plugin_id);
 	if (allowed[permission_key] === true) {
 		return false;
 	}
@@ -147,6 +150,30 @@ interface GetModuleOptions {
 	message?: string
 	optional?: boolean
 	show_permission_dialog?: boolean
+}
+function isLocalFilePlugin(plugin: PluginOrDevTools) {
+	return typeof plugin == 'object' && plugin && 'source' in plugin && plugin.source == 'file';
+}
+function autoGrantPluginPermission(plugin_id: string, permission_key: string, options: GetModuleOptions = {}) {
+	let allowed = ensurePluginPermissionBucket(plugin_id);
+	let changed = false;
+	if (permission_key == 'fs' && options.scope) {
+		if (typeof allowed[permission_key] != 'object' || !allowed[permission_key]?.directories) {
+			allowed[permission_key] = {directories: []};
+			changed = true;
+		}
+		if (!allowed[permission_key].directories.includes(options.scope)) {
+			allowed[permission_key].directories.push(options.scope);
+			changed = true;
+		}
+	} else if (allowed[permission_key] !== true) {
+		allowed[permission_key] = true;
+		changed = true;
+	}
+	if (changed) {
+		savePluginSettings();
+	}
+	return changed;
 }
 function getModule(module_name: string, plugin_id: string, plugin: PluginOrDevTools, options: GetModuleOptions = {}) {
 	const no_namespace_name = module_name.replace(/^node:/, '');
@@ -181,6 +208,12 @@ function getModule(module_name: string, plugin_id: string, plugin: PluginOrDevTo
 			if (changed) {
 				savePluginSettings();
 				emitPluginInitLog(`Auto-granted file system access to plugin "${plugin_id}"${options2.scope ? ` for ${options2.scope}` : ''}`);
+			}
+			has_permission = true;
+		} else if (isLocalFilePlugin(plugin)) {
+			let changed = autoGrantPluginPermission(plugin_id, permission_key, options2);
+			if (changed) {
+				emitPluginInitLog(`Auto-granted ${no_namespace_name} access to local plugin "${plugin_id}"`);
 			}
 			has_permission = true;
 		}
@@ -220,12 +253,7 @@ function getModule(module_name: string, plugin_id: string, plugin: PluginOrDevTo
 		}
 		if (result == Result.Always) {
 			// Save permission
-			if (!PluginSettings[plugin_id]?.allowed) {
-				PluginSettings[plugin_id] = {
-					allowed: {}
-				}
-			}
-			let allowed = PluginSettings[plugin_id].allowed;
+			let allowed = ensurePluginPermissionBucket(plugin_id);
 			if (no_namespace_name == 'fs' && options2.scope) {
 				if (typeof allowed[permission_key] != 'object') allowed[permission_key] = {directories: []}
 				allowed[permission_key].directories.push(options2.scope);
