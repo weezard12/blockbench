@@ -15,7 +15,12 @@ remote.initialize();
 let all_wins = [];
 let orig_win;
 let load_project_data;
-const startup_log_only = process.argv.includes('--startup-log-only');
+const launch_arguments = new Set(process.argv);
+function hasLaunchArgument(...flags) {
+	return flags.some(flag => launch_arguments.has(flag));
+}
+const startup_log_only = hasLaunchArgument('--startup-log-only');
+const auto_updates_disabled = hasLaunchArgument('--disable-auto-update', '--no-auto-update');
 
 function serializeMainDetails(details, depth = 0, seen = new WeakSet()) {
 	if (details === null || details === undefined) return details;
@@ -109,6 +114,7 @@ function createWindow(second_instance, options = {}) {
 		second_instance: !!second_instance,
 		options,
 		startup_log_only,
+		auto_updates_disabled,
 		argv_tail: process.argv.slice(-6),
 	});
 	if (app.requestSingleInstanceLock && !app.requestSingleInstanceLock()) {
@@ -339,6 +345,7 @@ app.commandLine.appendSwitch('ignore-gpu-blocklist')
 app.commandLine.appendSwitch('enable-accelerated-video')
 logMain('command line switches configured', {
 	startup_log_only,
+	auto_updates_disabled,
 	switches: ['ignore-gpu-blacklist', 'ignore-gpu-blocklist', 'enable-accelerated-video'],
 });
 
@@ -470,10 +477,11 @@ app.on('ready', () => {
 		execPath: process.execPath,
 		appPath: app.getAppPath(),
 		userData: app.getPath('userData'),
+		auto_updates_disabled,
 		argv_tail: process.argv.slice(-8),
 	});
 	const dev_mode = process.execPath && process.execPath.match(/node_modules[\\\/]electron/);
-	logMain('ready handler entered', {dev_mode: !!dev_mode, startup_log_only});
+	logMain('ready handler entered', {dev_mode: !!dev_mode, startup_log_only, auto_updates_disabled});
 
 	if (dev_mode) {
 
@@ -512,6 +520,12 @@ app.on('ready', () => {
 
 			console.log('[Blockbench] App launched in development mode')
 	
+		} else if (auto_updates_disabled) {
+
+			logMain('auto-update disabled by launch argument', {
+				flags: ['--disable-auto-update', '--no-auto-update'].filter(flag => launch_arguments.has(flag)),
+			});
+
 		} else {
 	
 			autoUpdater.autoInstallOnAppQuit = true;

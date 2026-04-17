@@ -39,6 +39,12 @@ Use this command or press Ctrl + Shift + B to launch Blockbench in Electron:
 To enable debugging in VS Code, switch to the **Run & Debug** tab, select the **"Debug Renderer"** configuration, and press the green arrow button to launch.
 Now you can set breakpoints and debug inside VSCode.
 
+### Launch Arguments
+Electron launches also support a few direct CLI arguments:
+
+* `--userData <path>` to override the user data directory.
+* `--disable-auto-update` or `--no-auto-update` to skip auto-update setup and update checks for that launch.
+
 
 ### Run the web app
 Use this command to launch the web app locally:
